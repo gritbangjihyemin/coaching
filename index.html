@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>국민대학교 면접코칭 예약페이지</title>
+<title>상담 예약장</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Song+Myung&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css">
@@ -169,6 +169,39 @@
     padding:0;
     margin-bottom:20px;
   }
+  .school-row{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    padding:16px 2px;
+    border-bottom:1px solid var(--rule);
+    cursor:pointer;
+  }
+  .school-row:hover{
+    background:var(--accent-soft);
+  }
+  .school-row .name{
+    font-size:16px;
+  }
+  .school-row .arrow{
+    color:var(--muted);
+    font-size:14px;
+  }
+  .selected-school-line{
+    font-size:13px;
+    color:var(--muted);
+    margin:-8px 0 20px;
+  }
+  .selected-school-line button{
+    background:none;
+    border:none;
+    padding:0;
+    margin-left:6px;
+    font-size:12px;
+    color:var(--accent);
+    text-decoration:underline;
+    cursor:pointer;
+  }
   #loading{
     font-size:13px;
     color:var(--muted);
@@ -196,12 +229,20 @@
 <body>
 
 <div class="sheet">
-  <h1>국민대학교 면접코칭 예약페이지</h1>
+  <h1>상담 예약장</h1>
   <p class="subtitle">1:1 진로&middot;취업 상담 예약</p>
   <hr>
 
+  <!-- 0단계: 학교 선택 -->
+  <div id="school-select-step">
+    <p class="section-title" style="margin-top:0;">학교를 선택해주세요</p>
+    <div id="school-list"></div>
+  </div>
+
   <!-- 1단계: 본인확인 -->
-  <div id="verify-step">
+  <div id="verify-step" style="display:none;">
+    <p class="selected-school-line">선택한 학교: <strong id="selected-school-name"></strong><button id="change-school-btn">변경</button></p>
+
     <label for="name-input">이름</label>
     <input type="text" id="name-input" placeholder="예: 김서연">
 
@@ -243,12 +284,18 @@
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 
+const schoolSelectStep = document.getElementById('school-select-step');
 const verifyStep = document.getElementById('verify-step');
 const mainStep = document.getElementById('main-step');
 const verifyError = document.getElementById('verify-error');
 const loading = document.getElementById('loading');
 
+let currentSchool = null; // { id, name }
 let currentUser = null; // { name, phone }
+
+function schoolCol(name){
+  return db.collection('schools').doc(currentSchool.id).collection(name);
+}
 
 function normalizePhone(v){
   return (v || '').replace(/[^0-9]/g, '');
@@ -277,6 +324,16 @@ function showToast(message){
 }
 
 // 세션 유지: 새로고침해도 다시 입력하지 않도록
+function saveSchoolSession(school){
+  sessionStorage.setItem('booking_school', JSON.stringify(school));
+}
+function loadSchoolSession(){
+  const raw = sessionStorage.getItem('booking_school');
+  return raw ? JSON.parse(raw) : null;
+}
+function clearSchoolSession(){
+  sessionStorage.removeItem('booking_school');
+}
 function saveSession(user){
   sessionStorage.setItem('booking_user', JSON.stringify(user));
 }
@@ -288,10 +345,52 @@ function clearSession(){
   sessionStorage.removeItem('booking_user');
 }
 
+// ---------- 0단계: 학교 선택 ----------
+async function loadSchoolList(){
+  const listEl = document.getElementById('school-list');
+  listEl.innerHTML = '<p class="empty">불러오는 중...</p>';
+  const snap = await db.collection('schools').orderBy('name').get();
+  if(snap.empty){
+    listEl.innerHTML = '<p class="empty">아직 등록된 학교가 없습니다. 담당자에게 문의해주세요.</p>';
+    return;
+  }
+  listEl.innerHTML = '';
+  snap.forEach(doc => {
+    const d = doc.data();
+    const row = document.createElement('div');
+    row.className = 'school-row';
+    row.innerHTML = `<span class="name">${d.name}</span><span class="arrow">＞</span>`;
+    row.addEventListener('click', () => selectSchool({ id: doc.id, name: d.name }));
+    listEl.appendChild(row);
+  });
+}
+
+function selectSchool(school){
+  currentSchool = school;
+  saveSchoolSession(school);
+  document.getElementById('selected-school-name').textContent = school.name;
+  schoolSelectStep.style.display = 'none';
+  verifyStep.style.display = 'block';
+}
+
+document.getElementById('change-school-btn').addEventListener('click', () => {
+  clearSchoolSession();
+  clearSession();
+  currentSchool = null;
+  currentUser = null;
+  mainStep.style.display = 'none';
+  verifyStep.style.display = 'none';
+  document.getElementById('name-input').value = '';
+  document.getElementById('phone-input').value = '';
+  schoolSelectStep.style.display = 'block';
+  loadSchoolList();
+});
+
+// ---------- 1단계: 본인확인 ----------
 async function verifyUser(name, phoneRaw){
   const phone = normalizePhone(phoneRaw);
   if(!name || !phone) return null;
-  const snap = await db.collection('participants').doc(phone).get();
+  const snap = await schoolCol('participants').doc(phone).get();
   if(!snap.exists) return null;
   const data = snap.data();
   if((data.name || '').trim() !== name.trim()) return null;
@@ -350,7 +449,7 @@ async function loadSlots(){
   const myRow = document.getElementById('my-reservation-row');
   listEl.innerHTML = '<p class="empty">불러오는 중...</p>';
 
-  const snap = await db.collection('slots').orderBy('date').orderBy('time').get();
+  const snap = await schoolCol('slots').orderBy('date').orderBy('time').get();
 
   let mySlot = null;
   const openSlots = [];
@@ -408,14 +507,14 @@ window.bookSlot = async function(slotId){
   setLoading(true);
   try{
     await db.runTransaction(async (tx) => {
-      const ref = db.collection('slots').doc(slotId);
+      const ref = schoolCol('slots').doc(slotId);
       const doc = await tx.get(ref);
       if(!doc.exists) throw new Error('존재하지 않는 시간대입니다.');
       const data = doc.data();
       if(data.reservedBy) throw new Error('이미 마감된 시간입니다.');
 
       // 중복 예약 방지: 이미 다른 시간에 예약이 있는지 확인
-      const allSlots = await db.collection('slots').get();
+      const allSlots = await schoolCol('slots').get();
       let already = false;
       allSlots.forEach(d => {
         const dd = d.data();
@@ -441,13 +540,13 @@ window.cancelSlot = async function(slotId){
   if(!confirm('예약을 취소할까요?')) return;
   setLoading(true);
   try{
-    const doc = await db.collection('slots').doc(slotId).get();
+    const doc = await schoolCol('slots').doc(slotId).get();
     if(!doc.exists) throw new Error('존재하지 않는 시간대입니다.');
     const data = doc.data();
     if(daysUntil(data.date) < 3){
       throw new Error('상담 3일 전부터는 취소할 수 없습니다. 변경이 필요하면 담당자에게 문의해주세요.');
     }
-    await db.collection('slots').doc(slotId).update({
+    await schoolCol('slots').doc(slotId).update({
       reservedBy: firebase.firestore.FieldValue.delete(),
       reservedAt: firebase.firestore.FieldValue.delete()
     });
@@ -463,7 +562,7 @@ window.cancelSlot = async function(slotId){
 async function loadFeedback(){
   const box = document.getElementById('feedback-box');
   try{
-    const snap = await db.collection('feedback').doc(currentUser.phone).get();
+    const snap = await schoolCol('feedback').doc(currentUser.phone).get();
     if(snap.exists && snap.data().content){
       box.textContent = snap.data().content;
     } else {
@@ -476,10 +575,24 @@ async function loadFeedback(){
 
 // 페이지 로드시 세션 확인
 (function init(){
-  const saved = loadSession();
-  if(saved){
-    currentUser = saved;
+  const savedSchool = loadSchoolSession();
+  if(!savedSchool){
+    schoolSelectStep.style.display = 'block';
+    loadSchoolList();
+    return;
+  }
+  currentSchool = savedSchool;
+  document.getElementById('selected-school-name').textContent = savedSchool.name;
+  schoolSelectStep.style.display = 'none';
+
+  const savedUser = loadSession();
+  if(savedUser){
+    currentUser = savedUser;
+    verifyStep.style.display = 'none';
+    mainStep.style.display = 'block';
     enterMainStep();
+  } else {
+    verifyStep.style.display = 'block';
   }
 })();
 </script>

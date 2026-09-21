@@ -29,21 +29,34 @@ URL이 공개되지 않는 한 실제로 접근할 사람은 없습니다. 필�
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /participants/{phone} {
-      allow read: if true;
-      allow write: if true;
-    }
-    match /slots/{slotId} {
-      allow read: if true;
-      allow write: if true;
-    }
-    match /feedback/{phone} {
-      allow read: if true;
-      allow write: if true;
+    match /schools/{schoolId} {
+      allow read, write: if true;
+
+      match /participants/{phone} {
+        allow read, write: if true;
+      }
+      match /slots/{slotId} {
+        allow read, write: if true;
+      }
+      match /feedback/{phone} {
+        allow read, write: if true;
+      }
     }
   }
 }
 ```
+
+**이미 예전 규칙(위 `participants`/`slots`/`feedback`이 최상위에 있던 버전)을 넣어두셨다면,
+Firestore > 규칙 탭에서 위 내용으로 교체하고 다시 "게시"를 눌러주세요.**
+
+## 2-1. 복합 색인(index) — 학교가 여러 개일 때 꼭 확인
+
+시간대 목록은 "날짜순 → 시간순"으로 정렬해서 가져오기 때문에 Firestore 복합 색인이 필요합니다.
+처음 시간대를 등록하고 목록이 안 보이면, 브라우저 콘솔(F12)에 뜨는 에러 메시지 속 링크를 눌러 색인을 만들면 됩니다.
+
+**중요:** 색인을 만드는 화면에서 **쿼리 범위(Query scope)를 "컬렉션 그룹(Collection group)"으로 선택**해야
+학교를 몇 개를 추가하든 그 색인 하나로 전부 적용됩니다. "컬렉션(Collection)"으로 만들면 학교마다 색인을
+새로 만들어야 해서 번거로워집니다.
 
 ## 3. 참가자 등록
 
@@ -85,6 +98,17 @@ service cloud.firestore {
 - 시간대 관리: 상담 가능한 날짜/시간 추가·삭제
 - 명단 관리: 참가자 19명 등록·삭제
 - 피드백 작성: 참가자를 선택해 상담 피드백 입력 → 저장하면 참가자 본인 화면에 바로 반영
+
+## 여러 학교(프로그램) 함께 관리하기
+
+이 사이트는 여러 학교/프로그램을 하나의 사이트에서 관리할 수 있도록 만들어졌습니다.
+
+- 관리자 페이지 상단의 **"학교 선택"** 드롭다운으로 현재 작업할 학교를 고릅니다. 예약 현황·시간대 관리·명단 관리·피드백 작성은 모두 그 학교의 데이터만 보여줍니다.
+- **"학교 관리"** 탭에서 새 학교(또는 프로그램) 이름만 입력하면 바로 추가됩니다. 레포나 Firebase 프로젝트를 새로 만들 필요가 없습니다.
+- 참가자는 `index.html` 첫 화면에서 본인 학교를 직접 선택한 뒤, 그 학교 명단에 등록된 이름+전화번호로 본인확인을 합니다.
+- 학교를 삭제하면 그 학교의 참가자·시간대·피드백이 모두 함께 삭제되며 되돌릴 수 없습니다.
+
+**기존 데이터(20명, 국민대학교):** 처음 배포 때 있던 참가자 20명과 시간대는 새 구조로 자동 이전되지 않습니다. 관리자 페이지에서 **"학교 관리" → "국민대학교" 추가 → 학교 선택 드롭다운에서 국민대학교 선택 → 명단 관리에서 기존 엑셀 파일 다시 업로드**, 시간대는 필요한 만큼 다시 등록해주세요. (아직 실제 예약 건수가 0건이라 다시 등록해도 손실되는 정보가 없습니다.)
 
 ## 참고
 
