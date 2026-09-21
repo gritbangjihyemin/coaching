@@ -180,10 +180,12 @@
       </div>
       <button class="btn btn-accent" id="add-slot-btn">시간대 추가</button>
     </div>
-    <table>
-      <thead><tr><th>날짜</th><th>시간</th><th>방식</th><th>상태</th><th></th></tr></thead>
-      <tbody id="slots-table-body"></tbody>
-    </table>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>날짜</th><th>시간</th><th>방식</th><th>상태</th><th>예약자 배정</th><th></th></tr></thead>
+        <tbody id="slots-table-body"></tbody>
+      </table>
+    </div>
   </div>
 
   <!-- 명단 관리 -->
@@ -397,28 +399,86 @@ document.getElementById('add-slot-btn').addEventListener('click', async () => {
   loadAll();
 });
 
+let participantsCache = [];
+
 async function renderSlots(){
   const tbody = document.getElementById('slots-table-body');
   const snap = await db.collection('slots').orderBy('date').orderBy('time').get();
+
+  const pSnap = await db.collection('participants').orderBy('name').get();
+  participantsCache = [];
+  pSnap.forEach(doc => participantsCache.push(doc.data()));
+
   tbody.innerHTML = '';
   if(snap.empty){
-    tbody.innerHTML = '<tr><td colspan="5" class="empty">등록된 시간대가 없습니다.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">등록된 시간대가 없습니다.</td></tr>';
     return;
   }
   snap.forEach(doc => {
     const d = doc.data();
     const reserved = !!d.reservedBy;
     const tr = document.createElement('tr');
+
+    const options = participantsCache.map(p =>
+      `<option value="${p.phone}" ${reserved && d.reservedBy.phone === p.phone ? 'selected' : ''}>${p.name} (${p.phone})</option>`
+    ).join('');
+
     tr.innerHTML = `
       <td>${formatDate(d.date)}</td>
       <td>${d.time}</td>
       <td>${d.mode || '-'}</td>
       <td class="${reserved ? 'status-done' : 'status-open'}">${reserved ? '예약됨 (' + d.reservedBy.name + ')' : '공석'}</td>
+      <td>
+        <div style="display:flex; gap:6px; align-items:center;">
+          <select style="font-family:inherit; font-size:13px; padding:6px; border:1px solid var(--rule);" id="assign-select-${doc.id}">
+            <option value="">참가자 선택</option>
+            ${options}
+          </select>
+          <button class="btn btn-line" onclick="assignSlot('${doc.id}')">${reserved ? '변경' : '배정'}</button>
+        </div>
+      </td>
       <td><button class="btn btn-danger" onclick="deleteSlot('${doc.id}')">삭제</button></td>
     `;
     tbody.appendChild(tr);
   });
 }
+
+window.assignSlot = async function(slotId){
+  const select = document.getElementById(`assign-select-${slotId}`);
+  const phone = select.value;
+  if(!phone){ alert('참가자를 선택해주세요.'); return; }
+  const participant = participantsCache.find(p => p.phone === phone);
+  if(!participant){ alert('참가자 정보를 찾을 수 없습니다.'); return; }
+
+  try{
+    // 이 참가자가 이미 다른 시간에 예약이 있는지 확인
+    const allSlots = await db.collection('slots').get();
+    let existingSlotId = null;
+    allSlots.forEach(d => {
+      const dd = d.data();
+      if(dd.reservedBy && dd.reservedBy.phone === phone && d.id !== slotId){
+        existingSlotId = d.id;
+      }
+    });
+
+    if(existingSlotId){
+      const ok = confirm('이 참가자는 이미 다른 시간에 예약이 있습니다. 기존 예약을 취소하고 이 시간으로 옮길까요?');
+      if(!ok) return;
+      await db.collection('slots').doc(existingSlotId).update({
+        reservedBy: firebase.firestore.FieldValue.delete(),
+        reservedAt: firebase.firestore.FieldValue.delete()
+      });
+    }
+
+    await db.collection('slots').doc(slotId).update({
+      reservedBy: { name: participant.name, phone: participant.phone },
+      reservedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    loadAll();
+  }catch(e){
+    alert('배정 중 오류가 발생했습니다: ' + e.message);
+  }
+};
 
 window.deleteSlot = async function(slotId){
   if(!confirm('이 시간대를 삭제할까요? 예약이 되어 있어도 함께 삭제됩니다.')) return;
