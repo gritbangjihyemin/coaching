@@ -200,9 +200,23 @@
   <div class="panel" id="panel-participants">
 
     <div class="import-box">
-      <span class="desc">참가신청서 엑셀 파일(이름·전공·연락처·희망기업 등)을 그대로 올리면 한 번에 등록됩니다.</span>
+      <span class="desc">어떤 양식의 엑셀이든 올릴 수 있어요. 올리면 컬럼을 자동으로 읽어서, 이름·전화번호가 어느 컬럼인지만 확인해주시면 나머지 컬럼은 있는 그대로 저장됩니다.</span>
       <input type="file" id="excel-file-input" accept=".xlsx,.xls">
-      <button class="btn btn-accent" id="import-excel-btn">엑셀로 일괄 등록</button>
+    </div>
+
+    <div id="mapping-box" style="display:none;">
+      <div class="form-row">
+        <div class="form-field">
+          <label for="map-name-select">이름 컬럼</label>
+          <select id="map-name-select"></select>
+        </div>
+        <div class="form-field">
+          <label for="map-phone-select">전화번호 컬럼</label>
+          <select id="map-phone-select"></select>
+        </div>
+        <button class="btn btn-accent" id="import-excel-btn">이 매칭으로 등록</button>
+      </div>
+      <p class="empty" id="mapping-preview" style="margin-top:-8px;"></p>
     </div>
     <p id="import-result"></p>
 
@@ -218,26 +232,19 @@
         <input type="tel" id="p-phone" placeholder="예: 010-1234-5678">
       </div>
       <div class="form-field">
-        <label for="p-major">전공</label>
-        <input type="text" id="p-major" placeholder="예: 경영학전공">
-      </div>
-      <div class="form-field">
-        <label for="p-company">희망기업</label>
-        <input type="text" id="p-company" placeholder="예: 삼성전자">
-      </div>
-      <div class="form-field">
-        <label for="p-job">희망직무</label>
-        <input type="text" id="p-job" placeholder="예: 마케팅">
+        <label for="p-note">비고 (선택)</label>
+        <input type="text" id="p-note" placeholder="예: 경영학과 · 삼성전자 희망">
       </div>
       <button class="btn btn-accent" id="add-participant-btn">명단에 추가</button>
     </div>
 
     <div class="table-scroll">
       <table>
-        <thead><tr><th>이름</th><th>전화번호</th><th>전공</th><th>학년/상태</th><th>희망기업</th><th>희망직무</th><th>구분</th><th></th></tr></thead>
+        <thead><tr><th>이름</th><th>전화번호</th><th>추가정보</th><th></th></tr></thead>
         <tbody id="participants-table-body"></tbody>
       </table>
     </div>
+
   </div>
 
   <!-- 피드백 작성 -->
@@ -565,25 +572,37 @@ document.getElementById('add-participant-btn').addEventListener('click', async (
   if(!currentSchoolId){ alert('먼저 학교를 선택해주세요.'); return; }
   const name = document.getElementById('p-name').value.trim();
   const phone = normalizePhone(document.getElementById('p-phone').value);
-  const major = document.getElementById('p-major').value.trim();
-  const company = document.getElementById('p-company').value.trim();
-  const job = document.getElementById('p-job').value.trim();
+  const note = document.getElementById('p-note').value.trim();
   if(!name || !phone){ alert('이름과 전화번호를 모두 입력해주세요.'); return; }
-  await schoolCol('participants').doc(phone).set({ name, phone, major, company, job }, { merge: true });
+  const docData = { name, phone };
+  if(note) docData.extra = { 비고: note };
+  await schoolCol('participants').doc(phone).set(docData, { merge: true });
   document.getElementById('p-name').value = '';
   document.getElementById('p-phone').value = '';
-  document.getElementById('p-major').value = '';
-  document.getElementById('p-company').value = '';
-  document.getElementById('p-job').value = '';
+  document.getElementById('p-note').value = '';
   loadAll();
 });
+
+function formatExtra(d){
+  // 기존(국민대) 방식의 개별 필드들도 함께 표시 (하위 호환)
+  const legacyPairs = [
+    ['전공', d.major], ['학년/상태', d.yearStatus], ['학번', d.studentId],
+    ['이메일', d.email], ['운영방식', d.mode],
+    ['구분', d.teamType], ['팀명', d.teamName],
+    ['희망기업', d.company], ['희망직무', d.job], ['확인사항', d.note]
+  ].filter(([, v]) => v);
+
+  const extraPairs = d.extra ? Object.entries(d.extra).filter(([, v]) => v) : [];
+
+  return [...legacyPairs, ...extraPairs].map(([k, v]) => `${k}: ${v}`).join(' · ');
+}
 
 async function renderParticipants(){
   const tbody = document.getElementById('participants-table-body');
   const snap = await schoolCol('participants').orderBy('name').get();
   tbody.innerHTML = '';
   if(snap.empty){
-    tbody.innerHTML = '<tr><td colspan="8" class="empty">등록된 참가자가 없습니다.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="4" class="empty">등록된 참가자가 없습니다.</td></tr>';
     return;
   }
   snap.forEach(doc => {
@@ -592,11 +611,7 @@ async function renderParticipants(){
     tr.innerHTML = `
       <td>${d.name || ''}</td>
       <td>${d.phone || ''}</td>
-      <td class="small-note">${d.major || ''}</td>
-      <td class="small-note">${d.yearStatus || ''}</td>
-      <td class="small-note">${d.company || ''}</td>
-      <td class="small-note">${d.job || ''}</td>
-      <td class="small-note">${d.teamType || ''}${d.teamName ? ' · ' + d.teamName : ''}</td>
+      <td class="small-note">${formatExtra(d)}</td>
       <td><button class="btn btn-danger" onclick="deleteParticipant('${doc.id}')">삭제</button></td>
     `;
     tbody.appendChild(tr);
@@ -609,81 +624,123 @@ window.deleteParticipant = async function(phone){
   loadAll();
 };
 
-// ---------- 명단 관리: 엑셀 일괄 등록 ----------
-document.getElementById('import-excel-btn').addEventListener('click', async () => {
-  if(!currentSchoolId){ alert('먼저 학교를 선택해주세요.'); return; }
+// ---------- 명단 관리: 엑셀 파일 선택 시 컬럼 자동 감지 ----------
+let parsedRows = null;
+
+const NAME_SYNONYMS = ['이름', '성명', 'name'];
+const PHONE_SYNONYMS = ['연락처', '전화번호', '휴대폰', '휴대폰번호', '핸드폰', '핸드폰번호', 'phone', 'tel', '전화'];
+
+function guessColumn(headers, synonyms){
+  const found = headers.find(h => synonyms.includes(String(h).trim().toLowerCase()));
+  return found || '';
+}
+
+document.getElementById('excel-file-input').addEventListener('change', async () => {
   const fileInput = document.getElementById('excel-file-input');
+  const mappingBox = document.getElementById('mapping-box');
   const resultEl = document.getElementById('import-result');
   resultEl.style.display = 'none';
+  mappingBox.style.display = 'none';
+  parsedRows = null;
 
   const file = fileInput.files[0];
-  if(!file){ alert('엑셀 파일을 먼저 선택해주세요.'); return; }
+  if(!file) return;
 
   try{
     const data = await file.arrayBuffer();
     const wb = XLSX.read(data, { type: 'array' });
 
-    // "이름" 컬럼을 가진 시트를 찾음 (요약 시트 등은 건너뜀)
-    let rows = null;
+    // 시트가 여러 개면, 행이 가장 많은(=요약 시트가 아닌) 시트를 선택
+    let bestRows = [];
     for(const sheetName of wb.SheetNames){
-      const sheet = wb.Sheets[sheetName];
-      const json = XLSX.utils.sheet_to_json(sheet, { defval: '' });
-      if(json.length > 0 && Object.prototype.hasOwnProperty.call(json[0], '이름')){
-        rows = json;
-        break;
-      }
+      const json = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: '' });
+      if(json.length > bestRows.length) bestRows = json;
     }
 
-    if(!rows){
-      resultEl.textContent = '"이름" 컬럼을 가진 시트를 찾지 못했습니다. 파일 형식을 확인해주세요.';
+    if(bestRows.length === 0){
+      resultEl.textContent = '엑셀에서 데이터를 찾지 못했습니다. 파일을 확인해주세요.';
       resultEl.className = 'err';
       resultEl.style.display = 'block';
       return;
     }
 
+    parsedRows = bestRows;
+    const headers = Object.keys(bestRows[0]);
+
+    const nameSelect = document.getElementById('map-name-select');
+    const phoneSelect = document.getElementById('map-phone-select');
+    nameSelect.innerHTML = headers.map(h => `<option value="${h}">${h}</option>`).join('');
+    phoneSelect.innerHTML = headers.map(h => `<option value="${h}">${h}</option>`).join('');
+
+    const guessedName = guessColumn(headers, NAME_SYNONYMS);
+    const guessedPhone = guessColumn(headers, PHONE_SYNONYMS);
+    if(guessedName) nameSelect.value = guessedName;
+    if(guessedPhone) phoneSelect.value = guessedPhone;
+
+    document.getElementById('mapping-preview').textContent =
+      `감지된 컬럼: ${headers.join(', ')} (총 ${bestRows.length}행)`;
+
+    mappingBox.style.display = 'block';
+  }catch(e){
+    resultEl.textContent = '엑셀을 읽는 중 오류가 발생했습니다: ' + e.message;
+    resultEl.className = 'err';
+    resultEl.style.display = 'block';
+  }
+});
+
+// ---------- 명단 관리: 선택한 매칭으로 등록 ----------
+document.getElementById('import-excel-btn').addEventListener('click', async () => {
+  if(!currentSchoolId){ alert('먼저 학교를 선택해주세요.'); return; }
+  const resultEl = document.getElementById('import-result');
+  resultEl.style.display = 'none';
+
+  if(!parsedRows){ alert('엑셀 파일을 먼저 선택해주세요.'); return; }
+
+  const nameCol = document.getElementById('map-name-select').value;
+  const phoneCol = document.getElementById('map-phone-select').value;
+  if(!nameCol || !phoneCol){ alert('이름과 전화번호 컬럼을 선택해주세요.'); return; }
+
+  try{
     const batch = db.batch();
     let count = 0;
     let skipped = 0;
 
-    rows.forEach(row => {
-      const name = String(row['이름'] || '').trim();
-      const phone = normalizePhone(row['연락처']);
+    parsedRows.forEach(row => {
+      const name = String(row[nameCol] || '').trim();
+      const phone = normalizePhone(row[phoneCol]);
       if(!name || !phone){ skipped++; return; }
 
-      const docData = {
-        name,
-        phone,
-        major: String(row['학과(전공)'] || '').trim(),
-        yearStatus: String(row['학년/상태'] || '').trim(),
-        studentId: String(row['학번'] || '').trim(),
-        email: String(row['이메일'] || '').trim(),
-        mode: String(row['희망 운영방식'] || '').trim(),
-        teamType: String(row['개인/Team'] || '').trim(),
-        teamName: String(row['팀명'] || '').trim(),
-        company: String(row['희망기업'] || '').trim(),
-        job: String(row['희망직무'] || '').trim(),
-        note: String(row['확인사항'] || '').trim()
-      };
-      const ref = schoolCol('participants').doc(phone);
-      batch.set(ref, docData, { merge: true });
+      const extra = {};
+      Object.keys(row).forEach(header => {
+        if(header === nameCol || header === phoneCol) return;
+        const value = String(row[header] === undefined || row[header] === null ? '' : row[header]).trim();
+        if(value) extra[header] = value;
+      });
+
+      const docData = { name, phone };
+      if(Object.keys(extra).length > 0) docData.extra = extra;
+
+      batch.set(schoolCol('participants').doc(phone), docData, { merge: true });
       count++;
     });
 
     if(count === 0){
-      resultEl.textContent = '등록할 수 있는 행이 없습니다 (이름/연락처 필요).';
+      resultEl.textContent = '등록할 수 있는 행이 없습니다 (선택한 이름/전화번호 컬럼에 값이 있는지 확인해주세요).';
       resultEl.className = 'err';
       resultEl.style.display = 'block';
       return;
     }
 
     await batch.commit();
-    resultEl.textContent = `${count}명 등록 완료${skipped > 0 ? ` (이름 또는 연락처가 없어 ${skipped}건 제외)` : ''}`;
+    resultEl.textContent = `${count}명 등록 완료${skipped > 0 ? ` (이름 또는 전화번호가 없어 ${skipped}건 제외)` : ''}`;
     resultEl.className = 'ok';
     resultEl.style.display = 'block';
-    fileInput.value = '';
+    document.getElementById('excel-file-input').value = '';
+    document.getElementById('mapping-box').style.display = 'none';
+    parsedRows = null;
     loadAll();
   }catch(e){
-    resultEl.textContent = '읽는 중 오류가 발생했습니다: ' + e.message;
+    resultEl.textContent = '등록 중 오류가 발생했습니다: ' + e.message;
     resultEl.className = 'err';
     resultEl.style.display = 'block';
   }
