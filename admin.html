@@ -160,6 +160,7 @@
 
   <nav>
     <button class="tab-btn active" data-panel="panel-slots">예약·시간대 관리</button>
+    <button class="tab-btn" data-panel="panel-past-slots">지난 컨설팅</button>
     <button class="tab-btn" data-panel="panel-participants">명단 관리</button>
     <button class="tab-btn" data-panel="panel-feedback">피드백 작성</button>
     <button class="tab-btn" data-panel="panel-schools">학교 관리</button>
@@ -196,6 +197,17 @@
       <table>
         <thead><tr><th>학교</th><th>날짜</th><th>시간</th><th>방식</th><th>상태</th><th>참가자 배정</th><th></th></tr></thead>
         <tbody id="slots-table-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 지난 컨설팅 -->
+  <div class="panel" id="panel-past-slots">
+    <p class="empty" style="margin-top:0;">오늘(자정) 기준으로 어제까지의 컨설팅 기록입니다. 매일 자동으로 갱신됩니다.</p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>학교</th><th>날짜</th><th>시간</th><th>방식</th><th>상태</th><th>예약자</th><th>전화번호</th><th></th></tr></thead>
+        <tbody id="past-slots-table-body"></tbody>
       </table>
     </div>
   </div>
@@ -398,6 +410,27 @@ function formatDate(dateStr){
   return `${parseInt(m)}월 ${parseInt(day)}일(${weekday})`;
 }
 
+function todayStr(){
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+async function collectSlotsUnified(){
+  const rows = [];
+  if(isAllMode){
+    for(const school of allSchoolsCache){
+      const snap = await db.collection('schools').doc(school.id).collection('slots').orderBy('date').orderBy('time').get();
+      snap.forEach(doc => rows.push({ id: doc.id, schoolId: school.id, schoolName: school.name, ...doc.data() }));
+    }
+    rows.sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+  } else {
+    const snap = await schoolCol('slots').orderBy('date').orderBy('time').get();
+    const school = allSchoolsCache.find(s => s.id === currentSchoolId);
+    snap.forEach(doc => rows.push({ id: doc.id, schoolId: currentSchoolId, schoolName: school ? school.name : '', ...doc.data() }));
+  }
+  return rows;
+}
+
 async function loadAll(){
   await renderSchools();
 
@@ -409,13 +442,31 @@ async function loadAll(){
 
   if(!isAllMode && !currentSchoolId){
     document.getElementById('slots-table-body').innerHTML = '<tr><td colspan="7" class="empty">먼저 "학교 관리" 탭에서 학교를 추가해주세요.</td></tr>';
+    document.getElementById('past-slots-table-body').innerHTML = '';
     document.getElementById('participants-table-body').innerHTML = '';
     document.getElementById('fb-select').innerHTML = '';
     document.getElementById('summary-text').textContent = '';
     return;
   }
 
-  await renderSlotsUnified();
+  const today = todayStr();
+  const allRows = await collectSlotsUnified();
+  const upcomingRows = allRows.filter(r => r.date >= today);
+  const pastRows = allRows.filter(r => r.date < today);
+
+  if(!isAllMode){
+    const pSnap = await schoolCol('participants').orderBy('name').get();
+    participantsCache = [];
+    pSnap.forEach(doc => participantsCache.push(doc.data()));
+    document.getElementById('summary-text').textContent =
+      `등록 인원 ${pSnap.size}명 · 예약 완료 ${upcomingRows.filter(r => r.reservedBy).length}건`;
+  } else {
+    document.getElementById('summary-text').textContent =
+      `전체 학교 · 예약 완료 ${upcomingRows.filter(r => r.reservedBy).length}건`;
+  }
+
+  renderSlotsUnified(upcomingRows);
+  renderPastSlotsUnified(pastRows);
 
   if(isAllMode){
     document.getElementById('participants-table-body').innerHTML = '<tr><td colspan="4" class="empty">명단 관리는 특정 학교를 선택했을 때 사용할 수 있어요.</td></tr>';
@@ -428,40 +479,17 @@ async function loadAll(){
 }
 
 // ---------- 예약·시간대 통합 렌더링 ----------
-async function renderSlotsUnified(){
+function renderSlotsUnified(rows){
   const tbody = document.getElementById('slots-table-body');
-  tbody.innerHTML = '<tr><td colspan="7" class="empty">불러오는 중...</td></tr>';
-
-  const rows = [];
-
-  if(isAllMode){
-    for(const school of allSchoolsCache){
-      const snap = await db.collection('schools').doc(school.id).collection('slots').orderBy('date').orderBy('time').get();
-      snap.forEach(doc => rows.push({ id: doc.id, schoolId: school.id, schoolName: school.name, ...doc.data() }));
-    }
-    rows.sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
-  } else {
-    const snap = await schoolCol('slots').orderBy('date').orderBy('time').get();
-    const pSnap = await schoolCol('participants').orderBy('name').get();
-    participantsCache = [];
-    pSnap.forEach(doc => participantsCache.push(doc.data()));
-    const school = allSchoolsCache.find(s => s.id === currentSchoolId);
-    snap.forEach(doc => rows.push({ id: doc.id, schoolId: currentSchoolId, schoolName: school ? school.name : '', ...doc.data() }));
-    document.getElementById('summary-text').textContent =
-      `등록 인원 ${pSnap.size}명 · 예약 완료 ${rows.filter(r => r.reservedBy).length}건`;
-  }
 
   if(rows.length === 0){
     tbody.innerHTML = '<tr><td colspan="7" class="empty">등록된 시간대가 없습니다.</td></tr>';
-    if(isAllMode) document.getElementById('summary-text').textContent = '전체 학교';
     return;
   }
 
   tbody.innerHTML = '';
-  let doneCount = 0;
   rows.forEach(d => {
     const reserved = !!d.reservedBy;
-    if(reserved) doneCount++;
     const tr = document.createElement('tr');
 
     let assignCell;
@@ -495,10 +523,33 @@ async function renderSlotsUnified(){
     `;
     tbody.appendChild(tr);
   });
+}
 
-  if(isAllMode){
-    document.getElementById('summary-text').textContent = `전체 학교 · 예약 완료 ${doneCount}건`;
+function renderPastSlotsUnified(rows){
+  const tbody = document.getElementById('past-slots-table-body');
+
+  if(rows.length === 0){
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">완료된 컨설팅 기록이 없습니다.</td></tr>';
+    return;
   }
+
+  tbody.innerHTML = '';
+  // 최근 날짜가 위로 오도록 역순 정렬
+  [...rows].reverse().forEach(d => {
+    const reserved = !!d.reservedBy;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${d.schoolName}</td>
+      <td>${formatDate(d.date)}</td>
+      <td>${d.time}</td>
+      <td>${d.mode || '-'}</td>
+      <td class="${reserved ? 'status-done' : 'status-open'}">${reserved ? '완료' : '미예약'}</td>
+      <td>${reserved ? d.reservedBy.name : '-'}</td>
+      <td>${reserved ? d.reservedBy.phone : '-'}</td>
+      <td><button class="btn btn-danger" onclick="deleteSlotUnified('${d.schoolId}','${d.id}')">삭제</button></td>
+    `;
+    tbody.appendChild(tr);
+  });
 }
 
 window.cancelSlotUnified = async function(schoolId, slotId){
