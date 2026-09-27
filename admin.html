@@ -153,6 +153,7 @@
     <button class="tab-btn" data-panel="panel-participants">명단 관리</button>
     <button class="tab-btn" data-panel="panel-feedback">피드백 작성</button>
     <button class="tab-btn" data-panel="panel-schools">학교 관리</button>
+    <button class="tab-btn" data-panel="panel-all-slots">전체 학교 보기</button>
   </nav>
 
   <!-- 예약 현황 -->
@@ -277,6 +278,39 @@
       <tbody id="schools-table-body"></tbody>
     </table>
   </div>
+
+  <!-- 전체 학교 보기 -->
+  <div class="panel" id="panel-all-slots">
+    <p class="empty" style="margin-top:0;">모든 학교의 시간대와 예약 현황을 한 화면에서 보고 관리합니다. 상단의 "학교 선택"과는 별개로 작동합니다.</p>
+    <div class="form-row">
+      <div class="form-field">
+        <label for="all-slot-school">학교</label>
+        <select id="all-slot-school"></select>
+      </div>
+      <div class="form-field">
+        <label for="all-slot-date">날짜</label>
+        <input type="date" id="all-slot-date">
+      </div>
+      <div class="form-field">
+        <label for="all-slot-time">시간</label>
+        <select id="all-slot-time"></select>
+      </div>
+      <div class="form-field">
+        <label for="all-slot-mode">방식</label>
+        <select id="all-slot-mode">
+          <option value="대면">대면</option>
+          <option value="비대면">비대면</option>
+        </select>
+      </div>
+      <button class="btn btn-accent" id="add-all-slot-btn">시간대 추가</button>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>학교</th><th>날짜</th><th>시간</th><th>방식</th><th>예약자</th><th>전화번호</th><th>상태</th><th></th></tr></thead>
+        <tbody id="all-slots-table-body"></tbody>
+      </table>
+    </div>
+  </div>
 </div>
 
 <!-- 엑셀 읽기 -->
@@ -373,6 +407,7 @@ function formatDate(dateStr){
 
 async function loadAll(){
   await renderSchools();
+  loadAllSlotsPanel();
   if(!currentSchoolId){
     document.getElementById('status-table-body').innerHTML = '<tr><td colspan="7" class="empty">먼저 "학교 관리" 탭에서 학교를 추가해주세요.</td></tr>';
     document.getElementById('slots-table-body').innerHTML = '';
@@ -456,15 +491,17 @@ document.getElementById('export-status-btn').addEventListener('click', async () 
 // ---------- 시간대 관리 ----------
 // 30분 단위 시간 옵션 생성 (00:00 ~ 23:30)
 (function populateTimeOptions(){
-  const select = document.getElementById('slot-time');
+  const selects = [document.getElementById('slot-time'), document.getElementById('all-slot-time')];
   for(let h = 0; h < 24; h++){
     for(let m of [0, 30]){
       const hh = String(h).padStart(2, '0');
       const mm = String(m).padStart(2, '0');
-      const opt = document.createElement('option');
-      opt.value = `${hh}:${mm}`;
-      opt.textContent = `${hh}:${mm}`;
-      select.appendChild(opt);
+      selects.forEach(select => {
+        const opt = document.createElement('option');
+        opt.value = `${hh}:${mm}`;
+        opt.textContent = `${hh}:${mm}`;
+        select.appendChild(opt);
+      });
     }
   }
 })();
@@ -835,6 +872,92 @@ window.deleteSchool = async function(schoolId){
   }
   await refreshSchoolSelector();
   loadAll();
+};
+
+// ---------- 전체 학교 보기 ----------
+let allSchoolsCache = [];
+
+async function loadAllSlotsPanel(){
+  const schoolSelect = document.getElementById('all-slot-school');
+  const tbody = document.getElementById('all-slots-table-body');
+
+  const schoolsSnap = await db.collection('schools').orderBy('name').get();
+  allSchoolsCache = [];
+  schoolsSnap.forEach(doc => allSchoolsCache.push({ id: doc.id, name: doc.data().name }));
+
+  schoolSelect.innerHTML = allSchoolsCache.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+
+  if(allSchoolsCache.length === 0){
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">등록된 학교가 없습니다. "학교 관리" 탭에서 먼저 추가해주세요.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = '<tr><td colspan="8" class="empty">불러오는 중...</td></tr>';
+
+  const allSlots = [];
+  for(const school of allSchoolsCache){
+    const snap = await db.collection('schools').doc(school.id).collection('slots').orderBy('date').orderBy('time').get();
+    snap.forEach(doc => {
+      allSlots.push({ id: doc.id, schoolId: school.id, schoolName: school.name, ...doc.data() });
+    });
+  }
+
+  allSlots.sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+
+  if(allSlots.length === 0){
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">등록된 시간대가 없습니다.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = '';
+  allSlots.forEach(d => {
+    const reserved = !!d.reservedBy;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${d.schoolName}</td>
+      <td>${formatDate(d.date)}</td>
+      <td>${d.time}</td>
+      <td>${d.mode || '-'}</td>
+      <td>${reserved ? d.reservedBy.name : '-'}</td>
+      <td>${reserved ? d.reservedBy.phone : '-'}</td>
+      <td class="${reserved ? 'status-done' : 'status-open'}">${reserved ? '예약완료' : '공석'}</td>
+      <td>
+        ${reserved ? `<button class="btn btn-line" onclick="cancelAllSlot('${d.schoolId}','${d.id}')">예약취소</button>` : ''}
+        <button class="btn btn-danger" onclick="deleteAllSlot('${d.schoolId}','${d.id}')">삭제</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+document.getElementById('add-all-slot-btn').addEventListener('click', async () => {
+  const schoolId = document.getElementById('all-slot-school').value;
+  const date = document.getElementById('all-slot-date').value;
+  const time = document.getElementById('all-slot-time').value;
+  const mode = document.getElementById('all-slot-mode').value;
+  if(!schoolId){ alert('학교를 선택해주세요.'); return; }
+  if(!date || !time){ alert('날짜와 시간을 모두 입력해주세요.'); return; }
+  await db.collection('schools').doc(schoolId).collection('slots').add({ date, time, mode, reservedBy: null });
+  document.getElementById('all-slot-date').value = '';
+  loadAllSlotsPanel();
+  if(schoolId === currentSchoolId) loadAll();
+});
+
+window.cancelAllSlot = async function(schoolId, slotId){
+  if(!confirm('이 예약을 취소할까요?')) return;
+  await db.collection('schools').doc(schoolId).collection('slots').doc(slotId).update({
+    reservedBy: firebase.firestore.FieldValue.delete(),
+    reservedAt: firebase.firestore.FieldValue.delete()
+  });
+  loadAllSlotsPanel();
+  if(schoolId === currentSchoolId) loadAll();
+};
+
+window.deleteAllSlot = async function(schoolId, slotId){
+  if(!confirm('이 시간대를 삭제할까요? 예약이 되어 있어도 함께 삭제됩니다.')) return;
+  await db.collection('schools').doc(schoolId).collection('slots').doc(slotId).delete();
+  loadAllSlotsPanel();
+  if(schoolId === currentSchoolId) loadAll();
 };
 </script>
 
