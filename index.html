@@ -261,7 +261,7 @@
 
     <div id="my-reservation-block" style="display:none;">
       <p class="section-title">내 예약</p>
-      <div class="row" id="my-reservation-row"></div>
+      <div id="my-reservation-rows"></div>
     </div>
 
     <p class="section-title">예약 가능한 시간</p>
@@ -446,7 +446,7 @@ function daysUntil(dateStr){
 async function loadSlots(){
   const listEl = document.getElementById('slots-list');
   const myBlock = document.getElementById('my-reservation-block');
-  const myRow = document.getElementById('my-reservation-row');
+  
   listEl.innerHTML = '<p class="empty">불러오는 중...</p>';
 
   const snap = await schoolCol('slots').orderBy('date').orderBy('time').get();
@@ -463,27 +463,26 @@ async function loadSlots(){
     }
   });
 
-  // 내 예약 표시
-  const existingNotice = document.getElementById('cancel-notice');
-  if(existingNotice) existingNotice.remove();
-
-  if(mySlot){
-    myBlock.style.display = 'block';
-    const lbl = formatLabel(mySlot.date, mySlot.time);
-    const canCancel = daysUntil(mySlot.date) >= 3;
-    myRow.innerHTML = `
-      <span class="when">${lbl.main}<span class="weekday">${lbl.weekday}</span>${mySlot.mode ? `<span class="mode-tag">${mySlot.mode}</span>` : ''}</span>
-      ${canCancel
-        ? `<button class="btn-line muted" onclick="cancelSlot('${mySlot.id}')">취소</button>`
-        : `<span class="status-closed">취소 불가</span>`}
-    `;
-    if(!canCancel){
-      myRow.insertAdjacentHTML('afterend',
-        '<p class="empty" id="cancel-notice" style="margin-top:-4px;">상담 3일 전부터는 취소할 수 없습니다. 변경이 필요하면 담당자에게 문의해주세요.</p>');
+  // 내 예약 표시 (최대 MAX_RESERVATIONS건)
+    if(mySlots.length > 0){
+          myBlock.style.display = 'block';
+          myRowsContainer.innerHTML = mySlots.map(slot => {
+                  const lbl = formatLabel(slot.date, slot.time);
+                  const canCancel = daysUntil(slot.date) >= 3;
+                  return `
+                          <div class="row">
+                                    <span class="when">${lbl.main}<span class="weekday">${lbl.weekday}</span>${slot.mode ? `<span class="mode-tag">${slot.mode}</span>` : ''}</span>
+                                              ${canCancel
+                                                            ? `<button class="btn-line muted" onclick="cancelSlot('${slot.id}')">취소</button>`
+                                                            : `<span class="status-closed">취소 불가</span>`}
+                                                                    </div>
+                                                                            ${!canCancel ? '<p class="empty" style="margin-top:-4px;">상담 3일 전부터는 취소할 수 없습니다. 변경이 필요하면 담당자에게 문의해주세요.</p>' : ''}
+                                                                                  `;
+          }).join('');
+    } else {
+          myBlock.style.display = 'none';
+          myRowsContainer.innerHTML = '';
     }
-  } else {
-    myBlock.style.display = 'none';
-  }
 
   // 예약 가능 목록
   if(openSlots.length === 0){
