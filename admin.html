@@ -654,6 +654,8 @@ document.getElementById('add-slot-btn').addEventListener('click', async () => {
 
 let participantsCache = [];
 
+const MAX_RESERVATIONS = 2;
+
 window.assignSlot = async function(slotId){
   const select = document.getElementById(`assign-select-${slotId}`);
   const phone = select.value;
@@ -662,23 +664,19 @@ window.assignSlot = async function(slotId){
   if(!participant){ alert('참가자 정보를 찾을 수 없습니다.'); return; }
 
   try{
-    // 이 참가자가 이미 다른 시간에 예약이 있는지 확인
+    // 이 참가자의 다른 예약 건수 확인 (이 시간대 제외) - 최대 MAX_RESERVATIONS건
     const allSlots = await schoolCol('slots').get();
-    let existingSlotId = null;
+    let otherCount = 0;
     allSlots.forEach(d => {
       const dd = d.data();
       if(dd.reservedBy && dd.reservedBy.phone === phone && d.id !== slotId){
-        existingSlotId = d.id;
+        otherCount++;
       }
     });
 
-    if(existingSlotId){
-      const ok = confirm('이 참가자는 이미 다른 시간에 예약이 있습니다. 기존 예약을 취소하고 이 시간으로 옮길까요?');
-      if(!ok) return;
-      await schoolCol('slots').doc(existingSlotId).update({
-        reservedBy: firebase.firestore.FieldValue.delete(),
-        reservedAt: firebase.firestore.FieldValue.delete()
-      });
+    if(otherCount >= MAX_RESERVATIONS){
+      alert('이 참가자는 이미 ' + MAX_RESERVATIONS + '건 예약돼 있어요. 기존 예약을 하나 취소한 뒤 배정해주세요.');
+      return;
     }
 
     await schoolCol('slots').doc(slotId).update({
